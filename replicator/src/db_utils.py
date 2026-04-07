@@ -163,9 +163,12 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
                 else:
                     record[k] = v.strip()
             if k in datetime_columns:
-                record[k] = convert_datetime(v)
-            else:
-                record[k] = v
+                record[k] = convert_datetime(record[k])
+            
+            # Handle UUID/uniqueidentifier objects
+            import uuid
+            if isinstance(record[k], uuid.UUID):
+                record[k] = str(record[k]).upper()
 
         normalized_rows.append(record)
 
@@ -437,6 +440,9 @@ def to_sql_type(meta):
         if length <= 0 or length > 8000:
             return "VARBINARY(MAX)"
         return f"VARBINARY({length})"
+
+    if t == "uniqueidentifier":
+        return "UNIQUEIDENTIFIER"
 
     return "NVARCHAR(MAX)"
 
