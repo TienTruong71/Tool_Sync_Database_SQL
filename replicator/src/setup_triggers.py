@@ -228,9 +228,9 @@ def get_monitored_tables(conn):
     """Returns a list of tables that currently have CDC triggers and are allowed by config."""
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT TABLE_NAME 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_TYPE = 'BASE TABLE' 
+        SELECT TABLE_NAME
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_TYPE = 'BASE TABLE'
           AND TABLE_SCHEMA = 'dbo'
           AND TABLE_NAME NOT IN ('sync_audit_log', 'sysdiagrams')
           AND TABLE_NAME NOT LIKE 'sys%'

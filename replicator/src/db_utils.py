@@ -13,7 +13,6 @@ except ImportError:
 
 load_dotenv()
 
-# Cache for tables where fast_executemany is known to fail
 FAST_EXEC_FAIL_CACHE = set()
 
 
@@ -136,6 +135,8 @@ def get_primary_key(table_name: str, prefix: str):
     return row[0] if row else None
 
 
+
+##important
 def upsert_data_odbc(dst_conn, table, rows, primary_key):
     """
     Safe UPSERT for SQL Server via ODBC.

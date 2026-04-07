@@ -26,6 +26,11 @@ except ImportError:
     from .setup_triggers import auto_discover_new_tables, setup_triggers, get_monitored_tables, ensure_audit_log_table
     from .logger import Logger
 
+try:
+    from manual_sync import run_manual_sync
+except ImportError:
+    from .manual_sync import run_manual_sync
+
 load_dotenv()
 
 BATCH_SIZE = int(os.getenv("KINGDOM_BATCH_SIZE", "500"))
@@ -106,7 +111,6 @@ def start_replicator():
                         status = "Idle" if total_pending == 0 else f"Waiting (Pending: {pending_fmt})"
                         Logger.heartbeat(f"Replicator is {status}. Tables watched: {len(table_metadata)}")
                         last_heartbeat_time = time.time()
-                    
                     cursor.close()
                     time.sleep(POLL_INTERVAL)
                     continue
@@ -170,4 +174,14 @@ def start_replicator():
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Trigger-based CDC Replicator")
+    parser.add_argument("--sync-missing", action="store_true", help="Find and queue missing rows before starting")
+    parser.add_argument("--table", help="Specific table for sync-missing (optional)")
+    args = parser.parse_args()
+
+    if args.sync_missing:
+        from manual_sync import run_manual_sync
+        run_manual_sync(args.table)
+        
     start_replicator()
