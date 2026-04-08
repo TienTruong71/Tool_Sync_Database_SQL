@@ -20,7 +20,6 @@ def get_target_pks(conn, table_name, pk_col):
     Logger.info(f"Fetching all IDs from Target for table {table_name}...")
     
     pks = set()
-    # Using a clean table name for the query
     table_clean = table_name.replace('[', '').replace(']', '').replace('dbo.', '')
     query = f"SELECT [{pk_col}] FROM dbo.[{table_clean}]"
     
