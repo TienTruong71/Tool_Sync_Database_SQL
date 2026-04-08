@@ -1,9 +1,9 @@
-## Nếu có sửa lại code thì chạy lệnh sau để build lại exe
+## Nếu có sửa lại code thì chạy lệnh sau để build lại file .exe
 ```
 python build_exe.py
 ```
 
-## Nên để file .env cùng cấp với thư mục CDC_Replicator.exe
+## Bắt buộc phải để file .env cùng cấp với file CDC_Replicator.exe để chạy chương trình
 
 ```
 # ip db nguồn
