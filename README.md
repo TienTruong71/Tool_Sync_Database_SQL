@@ -22,8 +22,8 @@ KINGDOM_DST_SQLSERVER_DB=
 KINGDOM_DST_SQLSERVER_PORT=
 
 
-# KINGDOM_SYNC_TABLES=      # Table cụ thể muốn đồng bộ , default: all
-KINGDOM_BATCH_SIZE=                          # Tốc độ đồng bộ, default: 500
-KINGDOM_SCHEMA_CHECK_INTERVAL=             # Tốc độ check column trong table thay đổi, default: 5s
-KINGDOM_TABLE_SCAN_INTERVAL=             # Tốc độ check xem db có table nào thay đổi , default: 5m
+# KINGDOM_SYNC_TABLES=                  # Table cụ thể muốn đồng bộ , default: all
+KINGDOM_BATCH_SIZE=                     # Tốc độ đồng bộ, default: 500
+KINGDOM_SCHEMA_CHECK_INTERVAL=          # Tốc độ check column trong table thay đổi, default: 5s
+KINGDOM_TABLE_SCAN_INTERVAL=            # Tốc độ check xem db có table nào thay đổi , default: 5m
 ```
