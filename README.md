@@ -3,7 +3,7 @@
 python build_exe.py
 ```
 
-## Nên để file .env cùng cấp với thư mục CDC_replicator.exe
+## Nên để file .env cùng cấp với thư mục CDC_Replicator.exe
 
 ```
 # ip db nguồn
