@@ -1,4 +1,4 @@
-## nếu có sửa lại code thì chạy lệnh sau để build lại exe
+## Nếu có sửa lại code thì chạy lệnh sau để build lại exe
 ```
 python build_exe.py
 ```
