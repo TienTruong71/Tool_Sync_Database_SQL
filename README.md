@@ -6,7 +6,7 @@ python build_exe.py
 ## Bắt buộc phải để file .env cùng cấp với file CDC_Replicator.exe để chạy chương trình
 
 ```
-# ip db nguồn
+# IP DB nguồn
 KINGDOM_SQLSERVER_HOST=
 KINGDOM_SQLSERVER_USER=
 KINGDOM_SQLSERVER_PASS=
@@ -14,7 +14,7 @@ KINGDOM_SQLSERVER_DB=
 KINGDOM_SQLSERVER_PORT=
 
 
-# ip db đích
+# IP DB đích
 KINGDOM_DST_SQLSERVER_HOST=
 KINGDOM_DST_SQLSERVER_USER=
 KINGDOM_DST_SQLSERVER_PASS=
