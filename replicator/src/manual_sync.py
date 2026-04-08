@@ -30,7 +30,7 @@ def get_target_pks(conn, table_name, pk_col):
         if not rows:
             break
         for row in rows:
-            pks.add(str(row[0])) 
+            pks.add(str(row[0]))
             count += 1
         if count % 250000 == 0:
             Logger.info(f"  > Loaded {count:,} Target IDs...", indent=1)

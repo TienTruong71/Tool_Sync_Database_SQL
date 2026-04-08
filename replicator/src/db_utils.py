@@ -371,7 +371,7 @@ def fetch_rows_by_pks(src_conn, schema, table, pk_col, pks):
         return []
 
     results = []
-    chunk_size = 1000  # Avoid ODBC parameter limits
+    chunk_size = 1000
     for i in range(0, len(pks), chunk_size):
         chunk = pks[i : i + chunk_size]
         placeholders = ", ".join(["?" for _ in chunk])

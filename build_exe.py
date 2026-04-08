@@ -29,9 +29,9 @@ def build_exe():
         "--hidden-import", "logger",
         entry_point
     ]
-    
+
     print(f"Running PyInstaller command...")
-    
+
     try:
         subprocess.run(command, check=True, cwd=project_dir)
         

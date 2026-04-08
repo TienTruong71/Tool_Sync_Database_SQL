@@ -27,3 +27,8 @@ KINGDOM_BATCH_SIZE=                     # Tốc độ đồng bộ, default: 500
 KINGDOM_SCHEMA_CHECK_INTERVAL=          # Tốc độ check column trong table thay đổi, default: 5s
 KINGDOM_TABLE_SCAN_INTERVAL=            # Tốc độ check xem db có table nào thay đổi , default: 5m
 ```
+
+## Trong trường hợp hi hữu lỡ tay xóa bảng log hoặc khởi động nguội thì chạy lại lệnh sau ở cmd trong folder chứa file .exe để bù đắp dữ liệu
+```
+CDC_Replicator.exe --sync-missing
+```
