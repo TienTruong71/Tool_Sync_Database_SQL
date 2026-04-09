@@ -263,4 +263,4 @@ def get_monitored_tables(conn):
     return [t for t in all_tables if t in triggered_tables]
 
 if __name__ == "__main__":
-    setup_triggers()
+    setup_triggers() 
