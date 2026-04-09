@@ -39,7 +39,7 @@ def get_target_pks(conn, table_name, pk_col):
     cursor.close()
     return pks
 
-def find_and_queue_missing(src_conn, dst_conn, table_name):
+def find_and_queue_missing(src_conn, dst_conn, audit_conn, table_name):
     """Find missing rows and insert them into sync_audit_log."""
     prefix = "KINGDOM"
     pk_col = get_primary_key(table_name, prefix)
@@ -72,15 +72,15 @@ def find_and_queue_missing(src_conn, dst_conn, table_name):
                 missing_pks.append(pk_val)
                 total_missing += 1
                 
-            if len(missing_pks) >= 5000:
-                inject_to_audit_log(src_conn, table_name, missing_pks)
+            if len(missing_pks) >= 50000:
+                inject_to_audit_log(audit_conn, table_name, missing_pks)
                 missing_pks = []
 
         if total_scanned % 250000 == 0:
             Logger.info(f"  > Scanned {total_scanned:,} Source rows... (Found {total_missing:,} missing)", indent=1)
 
     if missing_pks:
-        inject_to_audit_log(src_conn, table_name, missing_pks)
+        inject_to_audit_log(audit_conn, table_name, missing_pks)
         
     Logger.success(f"Completed! Scanned {total_scanned:,} rows. Found and queued {total_missing:,} missing rows.")
     src_cursor.close()
@@ -88,14 +88,18 @@ def find_and_queue_missing(src_conn, dst_conn, table_name):
 def inject_to_audit_log(conn, table_name, pks):
     """Insert missing PKs into sync_audit_log in bulk."""
     cursor = conn.cursor()
+    cursor.fast_executemany = True
     table_clean = table_name.replace('[', '').replace(']', '').replace('dbo.', '')
     
     sql = "INSERT INTO dbo.sync_audit_log (table_name, pk_value, operation) VALUES (?, ?, 'I')"
     params = [(table_clean, pk) for pk in pks]
     
     try:
+        t0 = time.time()
         cursor.executemany(sql, params)
         conn.commit()
+        if len(pks) >= 5000:
+            Logger.info(f"  > Đã Bulk Insert {len(pks):,} missing IDs vào audit_log trong {time.time()-t0:.2f}s", indent=2)
     except Exception as e:
         conn.rollback()
         Logger.error(f"Failed to inject batch into audit log", exc=e)
@@ -108,6 +112,7 @@ def run_manual_sync(specific_table=None):
     
     src_conn = connect_db(prefix, target=False)
     dst_conn = connect_db(prefix, target=True)
+    audit_conn = connect_db(prefix, target=False)
     
     try:
         if specific_table:
@@ -122,11 +127,12 @@ def run_manual_sync(specific_table=None):
 
         for table in tables:
             Logger.process(f"Checking table: {table}")
-            find_and_queue_missing(src_conn, dst_conn, table)
+            find_and_queue_missing(src_conn, dst_conn, audit_conn, table)
             
     finally:
         src_conn.close()
         dst_conn.close()
+        audit_conn.close()
 
 if __name__ == "__main__":
     import argparse

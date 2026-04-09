@@ -103,8 +103,13 @@ def ensure_table_exists(src_conn, dst_conn, table_name: str):
         Logger.error(f"Failed to create table {table_name_clean}", exc=e)
 
 
-def get_primary_key(table_name: str, prefix: str):
-    conn = connect_db(prefix)
+def get_primary_key(table_name: str, prefix: str, cursor=None):
+    close_cursor = False
+    if not cursor:
+        conn = connect_db(prefix)
+        cursor = conn.cursor()
+        close_cursor = True
+
     table_name_clean = table_name.split(".")[-1]
 
     pk_query = f"""
@@ -115,23 +120,51 @@ def get_primary_key(table_name: str, prefix: str):
         WHERE tc.TABLE_NAME = '{table_name_clean}'
           AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
     """
-
-    cursor = conn.cursor()
     cursor.execute(pk_query)
     row = cursor.fetchone()
     if row:
-        conn.close()
+        if close_cursor:
+            cursor.connection.close()
         return row[0]
 
-    print(f"[{prefix}] {table_name_clean} has no PK — falling back to first column.")
+    try:
+        cursor.execute(f"""
+            SELECT TOP 1 col.name
+            FROM sys.indexes ind
+            INNER JOIN sys.index_columns ic ON ind.object_id = ic.object_id AND ind.index_id = ic.index_id
+            INNER JOIN sys.columns col ON ic.object_id = col.object_id AND ic.column_id = col.column_id
+            WHERE ind.is_unique = 1 
+              AND ind.object_id = OBJECT_ID('dbo.[{table_name_clean}]')
+            ORDER BY ind.type_desc DESC 
+        """)
+        row = cursor.fetchone()
+        if row:
+            if close_cursor:
+                cursor.connection.close()
+            return row[0]
+    except Exception as e:
+        Logger.warn(f"Warning searching unique index for {table_name_clean}: {e}")
+
+    cursor.execute(
+        f"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+        f"WHERE TABLE_NAME='{table_name_clean}' AND LOWER(COLUMN_NAME) IN ('id', 'idx')"
+    )
+    row = cursor.fetchone()
+    if row: 
+        if close_cursor:
+            cursor.connection.close()
+        return row[0]
+
+    print(f"[{prefix}] {table_name_clean} has no unique key — falling back to first column.")
     col_query = f"""
         SELECT TOP 1 COLUMN_NAME
         FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_NAME='{table_name_clean}'
+        WHERE TABLE_NAME='{table_name_clean}' ORDER BY ORDINAL_POSITION
     """
     cursor.execute(col_query)
     row = cursor.fetchone()
-    conn.close()
+    if close_cursor:
+        cursor.connection.close()
     return row[0] if row else None
 
 
@@ -190,111 +223,141 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
         cursor = dst_conn.cursor()
         cursor.fast_executemany = True
         
-        pk_col = (primary_key or columns[0]).lower()
-        update_params = []
-        insert_params = []
-
         cursor.execute(f"""
-            SELECT COLUMN_NAME 
-            FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_NAME = '{table_name_clean}' 
-              AND DATA_TYPE IN ('timestamp', 'rowversion')
+            SELECT c.name 
+            FROM sys.columns c
+            JOIN sys.tables t ON c.object_id = t.object_id
+            WHERE t.name = '{table_name_clean}' AND SCHEMA_NAME(t.schema_id) = 'dbo' AND c.is_identity = 1
         """)
-        excluded_cols = {r[0].lower() for r in cursor.fetchall()}
-        
-        if excluded_cols:
-            Logger.info(f"Skipping auto-managed columns for {table}: {', '.join(excluded_cols)}")
-            columns = [c for c in columns if c.lower() not in excluded_cols]
+        id_cols_res = cursor.fetchall()
+        identity_cols = {r[0].lower() for r in id_cols_res} if id_cols_res else set()
 
-        col_list = ", ".join(f"[{c}]" for c in columns)
-        placeholders_vals = ", ".join(["?" for _ in columns])
-        update_cols = [c for c in columns if c.lower() != pk_col.lower()]
+        if identity_cols:
+            try:
+                cursor.execute(f"SET IDENTITY_INSERT {table_full} ON")
+            except Exception as e:
+                Logger.warn(f"Failed to SET IDENTITY_INSERT ON for {table_full}: {e}")
 
-        pks_in_batch = []
-        for row in rows:
-            pk_val = row.get(pk_col)
-            if isinstance(pk_val, int):
-                pks_in_batch.append(str(pk_val))
-            else:
-                pks_in_batch.append(str(pk_val))
-        
-        existing_pks = set()
-        chunk_size_check = 1000
-        for i in range(0, len(pks_in_batch), chunk_size_check):
-            chunk = pks_in_batch[i : i + chunk_size_check]
-            placeholders_pk = ", ".join(["?" for _ in chunk])
-            check_query = f"SELECT [{pk_col}] FROM {table_full} WHERE [{pk_col}] IN ({placeholders_pk})"
-            cursor.execute(check_query, tuple(chunk))
-            existing_pks.update({str(r[0]) for r in cursor.fetchall()})
-
-        for row in rows:
-            pk_val = row.get(pk_col)
-            str_pk = str(pk_val)
+        try:
+            pk_col = (primary_key or columns[0]).lower()
+            update_params = []
+            insert_params = []
+    
+            cursor.execute(f"""
+                SELECT COLUMN_NAME 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = '{table_name_clean}' 
+                  AND DATA_TYPE IN ('timestamp', 'rowversion')
+            """)
+            excluded_cols = {r[0].lower() for r in cursor.fetchall()}
             
-            if str_pk in existing_pks:
-                update_values = [row.get(c) for c in update_cols]
-                update_params.append(tuple(update_values + [pk_val]))
-            else:
-                insert_values = [row.get(c) for c in columns]
-                insert_params.append(tuple(insert_values))
-
-        num_columns = len(columns)
-        dml_chunk_size = max(10, 2000 // (num_columns + 1))
-        dml_chunk_size = min(dml_chunk_size, 500)
-        
-        if update_params:
-            for i in range(0, len(update_params), dml_chunk_size):
-                chunk = update_params[i:i+dml_chunk_size]
-                val_placeholders = ", ".join(["(" + ", ".join(["?"] * (len(update_cols) + 1)) + ")"] * len(chunk))
-                flat_params = [val for row in chunk for val in row]
-                
-                alias_cols = ", ".join([f"[{c}]" for c in update_cols])
-                set_clauses = ", ".join([f"T.[{c}] = S.[{c}]" for c in update_cols])
-                
-                bulk_update_sql = f"""
-                UPDATE T 
-                SET {set_clauses}
-                FROM {table_full} T
-                INNER JOIN (VALUES {val_placeholders}) AS S ({alias_cols}, [{pk_col}])
-                ON T.[{pk_col}] = S.[{pk_col}]
-                """
-                cursor.execute(bulk_update_sql, flat_params)
+            if excluded_cols:
+                Logger.info(f"Skipping auto-managed columns for {table}: {', '.join(excluded_cols)}")
+                columns = [c for c in columns if c.lower() not in excluded_cols]
+    
+            col_list = ", ".join(f"[{c}]" for c in columns)
+            placeholders_vals = ", ".join(["?" for _ in columns])
+            update_cols = [c for c in columns if c.lower() != pk_col.lower() and c.lower() not in identity_cols]
+    
+            pks_in_batch = []
+            for row in rows:
+                pk_val = row.get(pk_col)
+                if isinstance(pk_val, int):
+                    pks_in_batch.append(str(pk_val))
+                else:
+                    pks_in_batch.append(str(pk_val))
             
-        if insert_params:
-            insert_sql = f"INSERT INTO {table_full} ({col_list}) VALUES ({placeholders_vals})"
-            chunk_size_exec = 1000
-            use_fast = table_full not in FAST_EXEC_FAIL_CACHE
-            
-            for i in range(0, len(insert_params), chunk_size_exec):
-                chunk = insert_params[i:i+chunk_size_exec]
-                success = False
-                if use_fast:
-                    try:
-                        cursor.executemany(insert_sql, chunk)
-                        success = True
-                    except Exception:
-                        FAST_EXEC_FAIL_CACHE.add(table_full)
-                        use_fast = False
-                        Logger.warn(f"Switching {table} to stable sync mode (fast mode unsupported).")
+            existing_pks = set()
+            chunk_size_check = 1000
+            for i in range(0, len(pks_in_batch), chunk_size_check):
+                chunk = pks_in_batch[i : i + chunk_size_check]
+                placeholders_pk = ", ".join(["?" for _ in chunk])
+                check_query = f"SELECT [{pk_col}] FROM {table_full} WHERE [{pk_col}] IN ({placeholders_pk})"
+                cursor.execute(check_query, tuple(chunk))
+                existing_pks.update({str(r[0]) for r in cursor.fetchall()})
+    
+            for row in rows:
+                pk_val = row.get(pk_col)
+                str_pk = str(pk_val)
                 
-                if not success:
-                    sub_chunk_size = 200
-                    for j in range(0, len(chunk), sub_chunk_size):
-                        sub_chunk = chunk[j:j+sub_chunk_size]
-                        v_placeholders = ", ".join(["(" + ", ".join(["?"] * len(columns)) + ")"] * len(sub_chunk))
-                        f_params = [val for row in sub_chunk for val in row]
+                if str_pk in existing_pks:
+                    update_values = [row.get(c) for c in update_cols]
+                    update_params.append(tuple(update_values + [pk_val]))
+                else:
+                    insert_values = [row.get(c) for c in columns]
+                    insert_params.append(tuple(insert_values))
+    
+            num_columns = len(columns)
+            dml_chunk_size = max(10, 2000 // (num_columns + 1))
+            dml_chunk_size = min(dml_chunk_size, 500)
+            
+            if update_params and update_cols:
+                set_clauses_exec = ", ".join([f"[{c}] = ?" for c in update_cols])
+                update_sql = f"UPDATE {table_full} SET {set_clauses_exec} WHERE [{pk_col}] = ?"
+                chunk_size_exec = 1000
+                use_fast_update = table_full not in FAST_EXEC_FAIL_CACHE
+                
+                for i in range(0, len(update_params), chunk_size_exec):
+                    chunk = update_params[i:i+chunk_size_exec]
+                    success = False
+                    if use_fast_update:
                         try:
-                            cursor.execute(f"INSERT INTO {table_full} ({col_list}) VALUES {v_placeholders}", f_params)
-                        except Exception as sub_error:
-                            Logger.error(f"Batch insert failed in {table}, trying final row-by-row fallback...", exc=sub_error)
-                            for row_params in sub_chunk:
-                                try:
-                                    cursor.execute(insert_sql, row_params)
-                                except Exception as row_error:
-                                    Logger.error(f"Row-level insert failed in {table}", exc=row_error)
-
-        dst_conn.commit()
-        Logger.success(f"Upserted {len(rows)} rows into {table_full} (U:{len(update_params)} I:{len(insert_params)})")
+                            cursor.executemany(update_sql, chunk)
+                            success = True
+                        except Exception:
+                            FAST_EXEC_FAIL_CACHE.add(table_full)
+                            use_fast_update = False
+                            Logger.warn(f"Switching {table} UPDATE to stable sync mode.")
+                    
+                    if not success:
+                        for row_params in chunk:
+                            try:
+                                cursor.execute(update_sql, row_params)
+                            except Exception as row_error:
+                                Logger.error(f"Row-level update failed in {table}", exc=row_error)
+                
+            if insert_params:
+                insert_sql = f"INSERT INTO {table_full} ({col_list}) VALUES ({placeholders_vals})"
+                chunk_size_exec = 1000
+                use_fast = table_full not in FAST_EXEC_FAIL_CACHE
+                
+                for i in range(0, len(insert_params), chunk_size_exec):
+                    chunk = insert_params[i:i+chunk_size_exec]
+                    success = False
+                    if use_fast:
+                        try:
+                            cursor.executemany(insert_sql, chunk)
+                            success = True
+                        except Exception:
+                            FAST_EXEC_FAIL_CACHE.add(table_full)
+                            use_fast = False
+                            Logger.warn(f"Switching {table} to stable sync mode (fast mode unsupported).")
+                    
+                    if not success:
+                        sub_chunk_size = 200
+                        for j in range(0, len(chunk), sub_chunk_size):
+                            sub_chunk = chunk[j:j+sub_chunk_size]
+                            v_placeholders = ", ".join(["(" + ", ".join(["?"] * len(columns)) + ")"] * len(sub_chunk))
+                            f_params = [val for row in sub_chunk for val in row]
+                            try:
+                                cursor.execute(f"INSERT INTO {table_full} ({col_list}) VALUES {v_placeholders}", f_params)
+                            except Exception as sub_error:
+                                Logger.error(f"Batch insert failed in {table}, trying final row-by-row fallback...", exc=sub_error)
+                                for row_params in sub_chunk:
+                                    try:
+                                        cursor.execute(insert_sql, row_params)
+                                    except Exception as row_error:
+                                        Logger.error(f"Row-level insert failed in {table}", exc=row_error)
+    
+            dst_conn.commit()
+            Logger.success(f"Upserted {len(rows)} rows into {table_full} (U:{len(update_params)} I:{len(insert_params)})")
+        
+        finally:
+            if identity_cols:
+                try:
+                    cursor.execute(f"SET IDENTITY_INSERT {table_full} OFF")
+                except Exception:
+                    pass
 
     except Exception as e:
         dst_conn.rollback()
@@ -371,7 +434,7 @@ def fetch_rows_by_pks(src_conn, schema, table, pk_col, pks):
         return []
 
     results = []
-    chunk_size = 1000
+    chunk_size = 2000
     for i in range(0, len(pks), chunk_size):
         chunk = pks[i : i + chunk_size]
         placeholders = ", ".join(["?" for _ in chunk])

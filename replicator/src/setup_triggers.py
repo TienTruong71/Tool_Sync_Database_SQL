@@ -96,34 +96,32 @@ def setup_single_table(conn, table: str) -> bool:
         cursor.execute(f"""
         CREATE TRIGGER dbo.[trig_cdc_{clean_table}_INS] ON dbo.[{table}] AFTER INSERT AS
         BEGIN
+            SET NOCOUNT ON;
             INSERT INTO dbo.sync_audit_log (table_name, pk_value, operation)
-            SELECT '{table}', CAST([{pk_col}] AS NVARCHAR(255)), 'I' FROM inserted;
+            SELECT '{table}', CAST([{pk_col}] AS NVARCHAR(MAX)), 'I' FROM inserted;
         END
         """)
 
         cursor.execute(f"""
         CREATE TRIGGER dbo.[trig_cdc_{clean_table}_UPD] ON dbo.[{table}] AFTER UPDATE AS
         BEGIN
+            SET NOCOUNT ON;
             INSERT INTO dbo.sync_audit_log (table_name, pk_value, operation)
-            SELECT '{table}', CAST([{pk_col}] AS NVARCHAR(255)), 'U' FROM inserted;
+            SELECT '{table}', CAST([{pk_col}] AS NVARCHAR(MAX)), 'U' FROM inserted;
         END
         """)
 
         cursor.execute(f"""
         CREATE TRIGGER dbo.[trig_cdc_{clean_table}_DEL] ON dbo.[{table}] AFTER DELETE AS
         BEGIN
+            SET NOCOUNT ON;
             INSERT INTO dbo.sync_audit_log (table_name, pk_value, operation)
-            SELECT '{table}', CAST([{pk_col}] AS NVARCHAR(255)), 'D' FROM deleted;
+            SELECT '{table}', CAST([{pk_col}] AS NVARCHAR(MAX)), 'D' FROM deleted;
         END
         """)
 
-        Logger.info(f"Queuing existing rows for initial sync: {table}...", indent=1)
-        cursor.execute(f"""
-            INSERT INTO dbo.sync_audit_log (table_name, pk_value, operation)
-            SELECT '{table}', CAST([{pk_col}] AS NVARCHAR(255)), 'I' FROM dbo.[{table}]
-        """)
-
         conn.commit()
+        Logger.info(f"Triggers for {table} successfully created.", indent=1)
         return True
 
     except Exception as e:
@@ -211,13 +209,19 @@ def auto_discover_new_tables(conn):
         allowed_tables = [t.strip() for t in sync_tables.split(",")]
         all_tables = [t for t in all_tables if t in allowed_tables]
 
-    cursor.execute("SELECT OBJECT_NAME(parent_id) FROM sys.triggers WHERE name LIKE 'trig_cdc_%_INS'")
+    cursor.execute("""
+        SELECT OBJECT_NAME(parent_id) 
+        FROM sys.triggers 
+        WHERE name LIKE 'trig_cdc_%' AND parent_class_desc = 'OBJECT_OR_COLUMN'
+        GROUP BY parent_id
+        HAVING COUNT(*) >= 3
+    """)
     triggered_tables = {r[0] for r in cursor.fetchall() if r[0]}
 
     new_tables = []
     for table in all_tables:
         if table not in triggered_tables:
-            Logger.info(f"[Auto-Discovery] Detected new unwatched table: {table}")
+            Logger.info(f"[Auto-Discovery] Detected missing or partial triggers for: {table}")
             if setup_single_table(conn, table):
                 new_tables.append(table)
     
@@ -243,7 +247,13 @@ def get_monitored_tables(conn):
         allowed = [t.strip() for t in sync_tables.split(",")]
         all_tables = [t for t in all_tables if t in allowed]
 
-    cursor.execute("SELECT OBJECT_NAME(parent_id) FROM sys.triggers WHERE name LIKE 'trig_cdc_%_INS'")
+    cursor.execute("""
+        SELECT OBJECT_NAME(parent_id) 
+        FROM sys.triggers 
+        WHERE name LIKE 'trig_cdc_%' AND parent_class_desc = 'OBJECT_OR_COLUMN'
+        GROUP BY parent_id
+        HAVING COUNT(*) >= 3
+    """)
     triggered_tables = {r[0] for r in cursor.fetchall() if r[0]}
     
     cursor.close()

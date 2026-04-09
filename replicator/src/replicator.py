@@ -42,7 +42,7 @@ TABLE_SCAN_INTERVAL = float(os.getenv("KINGDOM_TABLE_SCAN_INTERVAL", "300.0"))
 def start_replicator():
     Logger.info("Starting Trigger-based CDC Replicator...")
     prefix = "KINGDOM"
-    
+
     pk_cache = {}
     table_metadata = {}  
     last_discovery_time = 0 
@@ -110,7 +110,7 @@ def start_replicator():
                         pending_fmt = f"{total_pending:,}" if isinstance(total_pending, int) else total_pending
                         status = "Idle" if total_pending == 0 else f"Waiting (Pending: {pending_fmt})"
                         Logger.heartbeat(f"Replicator is {status}. Tables watched: {len(table_metadata)}")
-                        last_heartbeat_time = time.time()
+                        last_heartbeat_time = time.time() 
                     cursor.close()
                     time.sleep(POLL_INTERVAL)
                     continue
