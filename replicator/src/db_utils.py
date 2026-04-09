@@ -199,7 +199,6 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
             if k in datetime_columns:
                 record[k] = convert_datetime(record[k])
             
-            # Handle UUID/uniqueidentifier objects
             import uuid
             if isinstance(record[k], uuid.UUID):
                 record[k] = str(record[k]).upper()

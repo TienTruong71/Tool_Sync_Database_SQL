@@ -32,3 +32,9 @@ KINGDOM_TABLE_SCAN_INTERVAL=            # Tốc độ check xem db có table nà
 ```
 CDC_Replicator.exe --sync-missing
 ```
+
+## Lệnh xóa trigger và tạo bảng log lại phòng trường hợp hệ thống không quét được (... là tên table)
+```
+DROP TRIGGER IF EXISTS dbo.trig_cdc_...._INS;
+TRUNCATE TABLE dbo.sync_audit_log;
+```
