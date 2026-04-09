@@ -104,7 +104,7 @@ def inject_to_audit_log(conn, table_name, pks):
         cursor.executemany(sql, params)
         conn.commit()
         if len(pks) >= 5000:
-            Logger.info(f"  > Đã Bulk Insert {len(pks):,} missing IDs vào audit_log trong {time.time()-t0:.2f}s", indent=2)
+            Logger.info(f"  > Bulk Inserted {len(pks):,} missing IDs into audit_log in {time.time()-t0:.2f}s", indent=2)
     except Exception as e:
         conn.rollback()
         Logger.error(f"Failed to inject batch into audit log", exc=e)
