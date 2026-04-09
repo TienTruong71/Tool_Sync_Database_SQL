@@ -172,6 +172,7 @@ def setup_triggers():
           AND TABLE_NAME NOT IN ('sync_audit_log', 'sysdiagrams')
           AND TABLE_NAME NOT LIKE 'sys%'
           AND TABLE_NAME NOT LIKE 'MSr%'
+          AND TABLE_NAME NOT LIKE '%[_]tracking'
     """)
     tables = [row[0] for row in cursor.fetchall()]
     cursor.close()
@@ -201,6 +202,7 @@ def auto_discover_new_tables(conn):
           AND TABLE_NAME NOT IN ('sync_audit_log', 'sysdiagrams')
           AND TABLE_NAME NOT LIKE 'sys%'
           AND TABLE_NAME NOT LIKE 'MSr%'
+          AND TABLE_NAME NOT LIKE '%[_]tracking'
     """)
     all_tables = [r[0] for r in cursor.fetchall()]
 
@@ -239,6 +241,7 @@ def get_monitored_tables(conn):
           AND TABLE_NAME NOT IN ('sync_audit_log', 'sysdiagrams')
           AND TABLE_NAME NOT LIKE 'sys%'
           AND TABLE_NAME NOT LIKE 'MSr%'
+          AND TABLE_NAME NOT LIKE '%[_]tracking'
     """)
     all_tables = [r[0] for r in cursor.fetchall()]
     

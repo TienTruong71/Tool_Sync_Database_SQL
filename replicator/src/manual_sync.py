@@ -6,10 +6,10 @@ from dotenv import load_dotenv
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from db_utils import connect_db, get_primary_key, ensure_table_exists
+    from db_utils import connect_db, get_primary_key, ensure_table_exists, sync_schema_direct
     from logger import Logger
 except ImportError:
-    from .db_utils import connect_db, get_primary_key, ensure_table_exists
+    from .db_utils import connect_db, get_primary_key, ensure_table_exists, sync_schema_direct
     from .logger import Logger
 
 load_dotenv()
@@ -47,7 +47,10 @@ def find_and_queue_missing(src_conn, dst_conn, audit_conn, table_name):
         Logger.error(f"Could not find PK for table {table_name}. Skipping.")
         return
 
+
     ensure_table_exists(src_conn, dst_conn, table_name)
+    table_clean = table_name.replace('[', '').replace(']', '').replace('dbo.', '')
+    sync_schema_direct(src_conn, dst_conn, "dbo", table_clean)
 
     target_pks = get_target_pks(dst_conn, table_name, pk_col)
 
