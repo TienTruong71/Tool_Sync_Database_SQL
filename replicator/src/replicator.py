@@ -44,11 +44,11 @@ def start_replicator():
     prefix = "KINGDOM"
 
     pk_cache = {}
-    table_metadata = {}  
-    last_discovery_time = 0 
+    table_metadata = {}
+    last_discovery_time = 0
     last_heartbeat_time = 0
 
-    while True: 
+    while True:
         src_conn = None
         dst_conn = None
         try:
@@ -59,7 +59,7 @@ def start_replicator():
                 f"Source: {os.getenv(f'{prefix}_SQLSERVER_DB')} "
                 f"-> Target: {os.getenv(f'{prefix}_DST_SQLSERVER_DB')}"
             )
-            
+
             ensure_audit_log_table(src_conn)
 
             Logger.success("Replicator main loop active.")
@@ -70,7 +70,7 @@ def start_replicator():
                         new_tables = auto_discover_new_tables(src_conn)
                         if new_tables:
                             Logger.success(f"Auto-setup completed for: {', '.join(new_tables)}")
-                        
+
                         all_monitored = get_monitored_tables(src_conn)
                         for t in all_monitored:
                             if t not in table_metadata:
@@ -97,7 +97,7 @@ def start_replicator():
                         Logger.warn("Audit log table not found. Attempting auto-setup...")
                         setup_triggers()
                         continue
-                    raise e 
+                    raise e
 
                 try:
                     cursor.execute("SELECT COUNT(*) FROM dbo.sync_audit_log")
@@ -110,7 +110,7 @@ def start_replicator():
                         pending_fmt = f"{total_pending:,}" if isinstance(total_pending, int) else total_pending
                         status = "Idle" if total_pending == 0 else f"Waiting (Pending: {pending_fmt})"
                         Logger.heartbeat(f"Replicator is {status}. Tables watched: {len(table_metadata)}")
-                        last_heartbeat_time = time.time() 
+                        last_heartbeat_time = time.time()
                     cursor.close()
                     time.sleep(POLL_INTERVAL)
                     continue
@@ -178,10 +178,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Trigger-based CDC Replicator")
     parser.add_argument("--sync-missing", action="store_true", help="Find and queue missing rows before starting")
     parser.add_argument("--table", help="Specific table for sync-missing (optional)")
+    parser.add_argument("--setup-triggers", action="store_true", help="Setup or update CDC triggers on source database")
     args = parser.parse_args()
+
+    if args.setup_triggers:
+        from setup_triggers import setup_triggers
+        setup_triggers()
+        sys.exit(0)
 
     if args.sync_missing:
         from manual_sync import run_manual_sync
         run_manual_sync(args.table)
-        
+
     start_replicator()

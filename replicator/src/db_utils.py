@@ -59,7 +59,7 @@ def ensure_table_exists(src_conn, dst_conn, table_name: str):
     exists = dst_cursor.fetchone()[0]
     if exists and exists > 0:
         return
-    
+
     Logger.schema(f"Table dbo.[{table_name_clean}] not found on target. Initializing...")
 
     src_query = """
@@ -133,9 +133,9 @@ def get_primary_key(table_name: str, prefix: str, cursor=None):
             FROM sys.indexes ind
             INNER JOIN sys.index_columns ic ON ind.object_id = ic.object_id AND ind.index_id = ic.index_id
             INNER JOIN sys.columns col ON ic.object_id = col.object_id AND ic.column_id = col.column_id
-            WHERE ind.is_unique = 1 
+            WHERE ind.is_unique = 1
               AND ind.object_id = OBJECT_ID('dbo.[{table_name_clean}]')
-            ORDER BY ind.type_desc DESC 
+            ORDER BY ind.type_desc DESC
         """)
         row = cursor.fetchone()
         if row:
@@ -150,7 +150,7 @@ def get_primary_key(table_name: str, prefix: str, cursor=None):
         f"WHERE TABLE_NAME='{table_name_clean}' AND LOWER(COLUMN_NAME) IN ('id', 'idx')"
     )
     row = cursor.fetchone()
-    if row: 
+    if row:
         if close_cursor:
             cursor.connection.close()
         return row[0]
@@ -198,7 +198,7 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
                     record[k] = v.strip()
             if k in datetime_columns:
                 record[k] = convert_datetime(record[k])
-            
+
             import uuid
             if isinstance(record[k], uuid.UUID):
                 record[k] = str(record[k]).upper()
@@ -217,13 +217,13 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
     rows = [{k.lower(): v for k, v in r.items()} for r in normalized_rows]
     columns = list(rows[0].keys())
     table_name_clean = table.replace("dbo.", "").replace("[", "").replace("]", "")
-    
+
     try:
         cursor = dst_conn.cursor()
         cursor.fast_executemany = True
-        
+
         cursor.execute(f"""
-            SELECT c.name 
+            SELECT c.name
             FROM sys.columns c
             JOIN sys.tables t ON c.object_id = t.object_id
             WHERE t.name = '{table_name_clean}' AND SCHEMA_NAME(t.schema_id) = 'dbo' AND c.is_identity = 1
@@ -241,23 +241,23 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
             pk_col = (primary_key or columns[0]).lower()
             update_params = []
             insert_params = []
-    
+
             cursor.execute(f"""
-                SELECT COLUMN_NAME 
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_NAME = '{table_name_clean}' 
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = '{table_name_clean}'
                   AND DATA_TYPE IN ('timestamp', 'rowversion')
             """)
             excluded_cols = {r[0].lower() for r in cursor.fetchall()}
-            
+
             if excluded_cols:
                 Logger.info(f"Skipping auto-managed columns for {table}: {', '.join(excluded_cols)}")
                 columns = [c for c in columns if c.lower() not in excluded_cols]
-    
+
             col_list = ", ".join(f"[{c}]" for c in columns)
             placeholders_vals = ", ".join(["?" for _ in columns])
             update_cols = [c for c in columns if c.lower() != pk_col.lower() and c.lower() not in identity_cols]
-    
+
             pks_in_batch = []
             for row in rows:
                 pk_val = row.get(pk_col)
@@ -265,7 +265,7 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
                     pks_in_batch.append(str(pk_val))
                 else:
                     pks_in_batch.append(str(pk_val))
-            
+
             existing_pks = set()
             chunk_size_check = 1000
             for i in range(0, len(pks_in_batch), chunk_size_check):
@@ -274,28 +274,28 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
                 check_query = f"SELECT [{pk_col}] FROM {table_full} WHERE [{pk_col}] IN ({placeholders_pk})"
                 cursor.execute(check_query, tuple(chunk))
                 existing_pks.update({str(r[0]) for r in cursor.fetchall()})
-    
+
             for row in rows:
                 pk_val = row.get(pk_col)
                 str_pk = str(pk_val)
-                
+
                 if str_pk in existing_pks:
                     update_values = [row.get(c) for c in update_cols]
                     update_params.append(tuple(update_values + [pk_val]))
                 else:
                     insert_values = [row.get(c) for c in columns]
                     insert_params.append(tuple(insert_values))
-    
+
             num_columns = len(columns)
             dml_chunk_size = max(10, 2000 // (num_columns + 1))
             dml_chunk_size = min(dml_chunk_size, 500)
-            
+
             if update_params and update_cols:
                 set_clauses_exec = ", ".join([f"[{c}] = ?" for c in update_cols])
                 update_sql = f"UPDATE {table_full} SET {set_clauses_exec} WHERE [{pk_col}] = ?"
                 chunk_size_exec = 1000
                 use_fast_update = table_full not in FAST_EXEC_FAIL_CACHE
-                
+
                 for i in range(0, len(update_params), chunk_size_exec):
                     chunk = update_params[i:i+chunk_size_exec]
                     success = False
@@ -307,19 +307,19 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
                             FAST_EXEC_FAIL_CACHE.add(table_full)
                             use_fast_update = False
                             Logger.warn(f"Switching {table} UPDATE to stable sync mode.")
-                    
+
                     if not success:
                         for row_params in chunk:
                             try:
                                 cursor.execute(update_sql, row_params)
                             except Exception as row_error:
                                 Logger.error(f"Row-level update failed in {table}", exc=row_error)
-                
+
             if insert_params:
                 insert_sql = f"INSERT INTO {table_full} ({col_list}) VALUES ({placeholders_vals})"
                 chunk_size_exec = 1000
                 use_fast = table_full not in FAST_EXEC_FAIL_CACHE
-                
+
                 for i in range(0, len(insert_params), chunk_size_exec):
                     chunk = insert_params[i:i+chunk_size_exec]
                     success = False
@@ -331,7 +331,7 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
                             FAST_EXEC_FAIL_CACHE.add(table_full)
                             use_fast = False
                             Logger.warn(f"Switching {table} to stable sync mode (fast mode unsupported).")
-                    
+
                     if not success:
                         sub_chunk_size = 200
                         for j in range(0, len(chunk), sub_chunk_size):
@@ -347,10 +347,10 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
                                         cursor.execute(insert_sql, row_params)
                                     except Exception as row_error:
                                         Logger.error(f"Row-level insert failed in {table}", exc=row_error)
-    
+
             dst_conn.commit()
             Logger.success(f"Upserted {len(rows)} rows into {table_full} (U:{len(update_params)} I:{len(insert_params)})")
-        
+
         finally:
             if identity_cols:
                 try:
@@ -423,8 +423,8 @@ def sync_schema_direct(src_conn, dst_conn, schema, table):
             print(f"  > Executed: {sql}")
         except Exception as e:
             print(f"  > [ERROR] Failed to sync column: {e}")
-    
-    dst_conn.commit() 
+
+    dst_conn.commit()
     Logger.success(f"Schema synchronized successfully for {table}")
 
 
@@ -438,7 +438,7 @@ def fetch_rows_by_pks(src_conn, schema, table, pk_col, pks):
         chunk = pks[i : i + chunk_size]
         placeholders = ", ".join(["?" for _ in chunk])
         query = f"SELECT * FROM [{schema}].[{table}] WHERE [{pk_col}] IN ({placeholders})"
-        
+
         cursor = src_conn.cursor()
         try:
             cursor.execute(query, tuple(chunk))
@@ -454,7 +454,7 @@ def fetch_rows_by_pks(src_conn, schema, table, pk_col, pks):
                 Logger.error(f"Error fetching chunk for {schema}.{table}", exc=e)
             try: cursor.close()
             except: pass
-            
+
     return results
 
 

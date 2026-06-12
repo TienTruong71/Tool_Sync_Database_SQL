@@ -39,9 +39,9 @@ def _get_pk_for_table(cursor, table: str):
             FROM sys.indexes ind
             INNER JOIN sys.index_columns ic ON ind.object_id = ic.object_id AND ind.index_id = ic.index_id
             INNER JOIN sys.columns col ON ic.object_id = col.object_id AND ic.column_id = col.column_id
-            WHERE ind.is_unique = 1 
+            WHERE ind.is_unique = 1
               AND ind.object_id = OBJECT_ID('dbo.[{table}]')
-            ORDER BY ind.type_desc DESC 
+            ORDER BY ind.type_desc DESC
         """)
         row = cursor.fetchone()
         if row:
@@ -54,7 +54,7 @@ def _get_pk_for_table(cursor, table: str):
         f"WHERE TABLE_NAME='{table}' AND (COLUMN_NAME = 'id' OR COLUMN_NAME = 'ID')"
     )
     row = cursor.fetchone()
-    if row: 
+    if row:
         return row[0]
 
     cursor.execute(
@@ -65,7 +65,7 @@ def _get_pk_for_table(cursor, table: str):
     if row:
         Logger.warn(f"Table {table} has no unique key! Falling back to first column [{row[0]}]. Risk of duplicates!")
         return row[0]
-    
+
     return None
 
 
@@ -108,15 +108,6 @@ def setup_single_table(conn, table: str) -> bool:
             SET NOCOUNT ON;
             INSERT INTO dbo.sync_audit_log (table_name, pk_value, operation)
             SELECT '{table}', CAST([{pk_col}] AS NVARCHAR(MAX)), 'U' FROM inserted;
-        END
-        """)
-
-        cursor.execute(f"""
-        CREATE TRIGGER dbo.[trig_cdc_{clean_table}_DEL] ON dbo.[{table}] AFTER DELETE AS
-        BEGIN
-            SET NOCOUNT ON;
-            INSERT INTO dbo.sync_audit_log (table_name, pk_value, operation)
-            SELECT '{table}', CAST([{pk_col}] AS NVARCHAR(MAX)), 'D' FROM deleted;
         END
         """)
 
@@ -212,11 +203,11 @@ def auto_discover_new_tables(conn):
         all_tables = [t for t in all_tables if t in allowed_tables]
 
     cursor.execute("""
-        SELECT OBJECT_NAME(parent_id) 
-        FROM sys.triggers 
+        SELECT OBJECT_NAME(parent_id)
+        FROM sys.triggers
         WHERE name LIKE 'trig_cdc_%' AND parent_class_desc = 'OBJECT_OR_COLUMN'
         GROUP BY parent_id
-        HAVING COUNT(*) >= 3
+        HAVING COUNT(*) >= 2
     """)
     triggered_tables = {r[0] for r in cursor.fetchall() if r[0]}
 
@@ -226,7 +217,7 @@ def auto_discover_new_tables(conn):
             Logger.info(f"[Auto-Discovery] Detected missing or partial triggers for: {table}")
             if setup_single_table(conn, table):
                 new_tables.append(table)
-    
+
     cursor.close()
     return new_tables
 
@@ -244,23 +235,23 @@ def get_monitored_tables(conn):
           AND TABLE_NAME NOT LIKE '%[_]tracking'
     """)
     all_tables = [r[0] for r in cursor.fetchall()]
-    
+
     sync_tables = os.getenv("KINGDOM_SYNC_TABLES")
     if sync_tables:
         allowed = [t.strip() for t in sync_tables.split(",")]
         all_tables = [t for t in all_tables if t in allowed]
 
     cursor.execute("""
-        SELECT OBJECT_NAME(parent_id) 
-        FROM sys.triggers 
+        SELECT OBJECT_NAME(parent_id)
+        FROM sys.triggers
         WHERE name LIKE 'trig_cdc_%' AND parent_class_desc = 'OBJECT_OR_COLUMN'
         GROUP BY parent_id
-        HAVING COUNT(*) >= 3
+        HAVING COUNT(*) >= 2
     """)
     triggered_tables = {r[0] for r in cursor.fetchall() if r[0]}
-    
+
     cursor.close()
     return [t for t in all_tables if t in triggered_tables]
 
 if __name__ == "__main__":
-    setup_triggers() 
+    setup_triggers()
