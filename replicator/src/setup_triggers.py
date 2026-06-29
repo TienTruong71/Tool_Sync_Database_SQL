@@ -93,6 +93,7 @@ def setup_single_table(conn, table: str) -> bool:
             except Exception as e:
                 Logger.warn(f"Warning dropping old trigger for {table}: {e}", indent=1)
 
+#fetch trigger update and insert
         cursor.execute(f"""
         CREATE TRIGGER dbo.[trig_cdc_{clean_table}_INS] ON dbo.[{table}] AFTER INSERT AS
         BEGIN

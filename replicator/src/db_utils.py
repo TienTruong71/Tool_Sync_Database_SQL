@@ -39,6 +39,16 @@ def connect_db(prefix: str, target: bool = False):
 
     try:
         conn = pyodbc.connect(conn_str, autocommit=False)
+        # Ensure ANSI SET options are correct for computed column indexes
+        init_cursor = conn.cursor()
+        init_cursor.execute(
+            "SET ANSI_NULLS ON; "
+            "SET ANSI_WARNINGS ON; "
+            "SET ANSI_PADDING ON; "
+            "SET CONCAT_NULL_YIELDS_NULL ON;"
+        )
+        init_cursor.close()
+        conn.commit()
         Logger.info(f"Connected to {database} ({'target' if target else 'source'})")
         return conn
     except Exception as e:
@@ -196,6 +206,8 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
                     record[k] = v[:-3]
                 else:
                     record[k] = v.strip()
+                    if record[k] == "":
+                        record[k] = None
             if k in datetime_columns:
                 record[k] = convert_datetime(record[k])
 
@@ -215,13 +227,13 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
             table_full = table
 
     rows = [{k.lower(): v for k, v in r.items()} for r in normalized_rows]
-    columns = list(rows[0].keys())
     table_name_clean = table.replace("dbo.", "").replace("[", "").replace("]", "")
 
     try:
         cursor = dst_conn.cursor()
         cursor.fast_executemany = True
 
+        # Step 1: detect identity columns
         cursor.execute(f"""
             SELECT c.name
             FROM sys.columns c
@@ -230,6 +242,21 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
         """)
         id_cols_res = cursor.fetchall()
         identity_cols = {r[0].lower() for r in id_cols_res} if id_cols_res else set()
+
+        # Step 2: detect computed + timestamp columns and strip them from rows EARLY
+        cursor.execute(f"""
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = '{table_name_clean}'
+              AND (DATA_TYPE IN ('timestamp', 'rowversion')
+                   OR COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME), COLUMN_NAME, 'IsComputed') = 1)
+        """)
+        excluded_cols = {r[0].lower() for r in cursor.fetchall()}
+        if excluded_cols:
+            Logger.info(f"Skipping auto-managed columns for {table}: {', '.join(excluded_cols)}")
+            rows = [{k: v for k, v in row.items() if k not in excluded_cols} for row in rows]
+
+        columns = list(rows[0].keys())
 
         if identity_cols:
             try:
@@ -242,17 +269,22 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
             update_params = []
             insert_params = []
 
+
             cursor.execute(f"""
-                SELECT COLUMN_NAME
+                SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH
                 FROM INFORMATION_SCHEMA.COLUMNS
                 WHERE TABLE_NAME = '{table_name_clean}'
-                  AND DATA_TYPE IN ('timestamp', 'rowversion')
+                  AND DATA_TYPE IN ('varchar', 'nvarchar', 'char', 'nchar')
             """)
-            excluded_cols = {r[0].lower() for r in cursor.fetchall()}
+            char_limits = {r[0].lower(): r[1] for r in cursor.fetchall() if r[1] is not None and r[1] > 0}
 
-            if excluded_cols:
-                Logger.info(f"Skipping auto-managed columns for {table}: {', '.join(excluded_cols)}")
-                columns = [c for c in columns if c.lower() not in excluded_cols]
+            for row in rows:
+                for c in columns:
+                    cl = c.lower()
+                    if cl in char_limits and isinstance(row.get(cl), str):
+                        limit = char_limits[cl]
+                        if len(row[cl]) > limit:
+                            row[cl] = row[cl][:limit]
 
             col_list = ", ".join(f"[{c}]" for c in columns)
             placeholders_vals = ", ".join(["?" for _ in columns])
@@ -337,16 +369,33 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
                         for j in range(0, len(chunk), sub_chunk_size):
                             sub_chunk = chunk[j:j+sub_chunk_size]
                             v_placeholders = ", ".join(["(" + ", ".join(["?"] * len(columns)) + ")"] * len(sub_chunk))
-                            f_params = [val for row in sub_chunk for val in row]
+                            # sub_chunk contains tuples - flatten correctly
+                            f_params = [val for row_tuple in sub_chunk for val in row_tuple]
                             try:
                                 cursor.execute(f"INSERT INTO {table_full} ({col_list}) VALUES {v_placeholders}", f_params)
                             except Exception as sub_error:
                                 Logger.error(f"Batch insert failed in {table}, trying final row-by-row fallback...", exc=sub_error)
+                                # Create a fresh cursor to avoid corrupted state from batch failure
+                                fallback_cursor = dst_conn.cursor()
+                                if identity_cols:
+                                    try:
+                                        fallback_cursor.execute(f"SET IDENTITY_INSERT {table_full} ON")
+                                    except Exception:
+                                        pass
                                 for row_params in sub_chunk:
                                     try:
-                                        cursor.execute(insert_sql, row_params)
+                                        fallback_cursor.execute(insert_sql, row_params)
                                     except Exception as row_error:
+                                        for col_name, val in zip(columns, row_params):
+                                            if isinstance(val, str) and len(val) > 100:
+                                                Logger.error(f"  Suspect col [{col_name}] len={len(val)}: {val[:80]}...")
                                         Logger.error(f"Row-level insert failed in {table}", exc=row_error)
+                                if identity_cols:
+                                    try:
+                                        fallback_cursor.execute(f"SET IDENTITY_INSERT {table_full} OFF")
+                                    except Exception:
+                                        pass
+                                fallback_cursor.close()
 
             dst_conn.commit()
             Logger.success(f"Upserted {len(rows)} rows into {table_full} (U:{len(update_params)} I:{len(insert_params)})")
@@ -359,9 +408,11 @@ def upsert_data_odbc(dst_conn, table, rows, primary_key):
                     pass
 
     except Exception as e:
-        dst_conn.rollback()
-        Logger.error(f"Upsert failed for {table}", exc=e)
-        raise
+        try:
+            dst_conn.rollback()
+        except Exception:
+            pass
+        Logger.error(f"Upsert failed for {table} — skipping this batch to avoid crash", exc=e)
 
 
 def delete_data_odbc(conn, table, before, primary_key="id"):
